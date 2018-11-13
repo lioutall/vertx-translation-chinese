@@ -6,6 +6,8 @@
 
 答：Vert.x其实就是建立了一个Verticle内部的线程安全机制，让用户可以排除多线程并发冲突的干扰，专注于业务逻辑上的实现，用了Vert.x，您就不用操心多线程和并发的问题了。Verticle内部代码，除非声明Verticle是Worker Verticle，否则Verticle内部环境全部都是线程安全的，不会出现多个线程同时访问同一个Verticle内部代码的情况。
 
+> 请注意：*一般情况下，用了Vert.x的Verticle之后，原则上synchronized，Lock，volatile，static对象，java.util.concurrent, HashTable, Vector, Thread, Runnable, Callable, Executor, Task, ExecutorService等这些并发和线程相关的东西就不再需要使用了，可以由Verticle全面接管，如果您不得不在Vert.x代码中使用上述内容，则多少暗示着您的设计或者使用Vert.x的姿势出现了问题，建议再斟酌商榷一下。*
+
 ### 问：Verticle对象和处理器（Handler）是什么关系？Vert.x如何保证Verticle内部线程安全？
 
 答：Verticle对象往往包含有一个或者多个处理器（Handler），在Java代码中，后者经常是以Lambda也就是匿名函数的形式出现，比如：
@@ -41,13 +43,17 @@ public class MyVerticle extends AbstractVerticle {
 
         vertx.createHttpServer().requestHandler(req->{
             System.out.println(i);
-	    req.response().end(“”+i);
+	    req.response().end(""+i);
         }).listen(8081);
     }
 }
 ```
 
 访问 http://localhost:8080 就会使计数器加1，访问 http://localhost:8081 将会看到具体的计数。同理，也可以将i替换成HashMap等线程不安全对象，不需要使用ConcurrentHashMap或HashTable，可在Verticle内部安全使用。
+
+Vert.x的Handler内部是atomic/原子操作，Verticle内部是thread safe/线程安全的，Verticle之间传递的数据是immutable/不可改变的。
+
+一个vert.x实例/进程内有多个Eventloop和Worker线程，每个线程会部署多个Verticle对象并对应执行Verticle内的Handler，每个Verticle内有多个Handler，普通Verticle会跟Eventloop绑定，而Worker Verticle对象则会被Worker线程所共享，会依次顺序访问，但不会并发同时访问，如果声明为Multiple Threaded Worker Verticle则没有此限制，需要开发者手工处理并发冲突，我们并不推荐这类操作。
 
 ### 问：什么是显著执行时间？什么是异步？如何正确理解文档中说的不要阻塞Eventloop？
 
@@ -64,6 +70,12 @@ public class MyVerticle extends AbstractVerticle {
 我们来看一个简单的例子：某个程序要求，当前线程发送一个请求给网络上另外一个服务器，然后获取到结果之后作出相应的处理。那么此时有一个明显的IO操作，就是发送网络请求并等待对方返回结果。因为网络的速度要远远慢于内存处理的速度，所以此时的操作便是非纯粹内存操作，就有可能造成线程的阻塞，那么此时应该将这个操作交给其它线程予以处理，在处理完成之前，释放当前线程，等处理完成之后，再由当前线程执行回调函数。Vert.x自带的网络客户端（NetClient，HttpClient等）已经帮您包装好了这部分逻辑代码，直接使用NetClient等客户端，Vert.x就会将发送请求并等待返回结果这部分代码交给另外一个线程予以执行，此时这另外一个线程是内核线程，这部分的异步处理由JVM以及操作系统完成，您不需要自己定义一个线程并执行。类似的，数据库的处理同样涉及IO操作，所以Vert.x自带的JDBC客户端（JDBCClient）会帮您完成这部分的封装，您只需要直接调用JDBCClient的各种API便可完成操作，此时有可能是其它进程中的线程，比如PostgresQL会使用进程池来建立连接池，但是该线程亦不需要您去创建，Vert.x帮您完成了这些操作。类似的，硬盘上的操作，比如文件系统的API，也有可能造成阻塞，所以Vert.x的文件系统API提供了非阻塞API，但是值得说明的是，硬盘上的操作，如果只是少量操作，执行时间上也不会明显超长，所以Vert.x同时提供了硬盘操作的阻塞和非阻塞两种API。最后我们来看一个纯粹内存操作同时又是阻塞的例子。
 
 假设我们拿到两个数万个节点的链表（LinkedList<String>），要求删除两个链表的交集，那么在没有任何算法优化的前提下，该操作的时间复杂度是O(n^2)，又因为内存中该链表节点数庞大，多达数万个节点，所以如果在Eventloop中执行该操作，将有可能使得执行时间超长，此时需要将这部分代码交由其它线程予以执行，Vert.x提供了除了Eventloop线程池以外的线程池，名曰Worker线程池。此时就需要用户自行将该部分代码包装成Worker线程执行的代码，并交给Worker线程予以执行，执行完成之后再由Eventloop线程执行回调函数处理其结果。*注意：Vert.x中将代码交给Worker线程执行的方式有两种，一种是通过executeBlocking函数包装，另外一种是写入Worker Verticle中。*
+
+### 问：为什么Verticle之间传递的消息要求是immutable（不可变）的？
+
+答：因为immutable（不可变的）的东西线程安全，可以被多个线程安全地并发访问，线程在使用的时候拷贝一份也不会有并发问题，Java里面字符串（String）对象是immutable（不可变）的，所以缺省情况下事件总线（eventbus）上传递的消息是字符串，vert.x也实现了事件总线上消息类型的编解码器，除了字符串以外，还支持少量的其它类型，比如原始数据类型及其包装类，比如字节流（byte[]），比如Json对象（JsonObject, JsonArray）还有Buffer，这些对象在传递过程中是不可变的。
+
+Vert.x线程模型保证Verticle内部代码线程安全，同时要求在Verticle之间传递的消息是不可变的，通过此方法保证Verticle之间传递的消息也是线程安全的，从而进一步保证Vert.x内部整体是线程安全的，从而将开发人员从繁琐的，容易错的各种多线程并发问题中解脱出来。
 
 ### 问：我刚拿到一个第三方类库（lib/jars），怎么判断这个类库中的方法是异步还是同步的？有没有简单粗暴的方法可以一眼看出来？
 
@@ -136,9 +148,6 @@ future.setHandler(asyncResult -> {
 });
 //使用future之后，用completer方法填充参数
 vertx.eventBus().send("address","message", future.completer());
-//或
-vertx.eventBus().send("address","message", future);
-//以上两种写法等效，future继承自Handler<AsyncResult<T>>，completer方法会返回该部分代码，所以可直接使用future
 ```
 
 一个复杂一点的例子：
@@ -204,6 +213,29 @@ Future.<Message<String>>future((future) ->
 
 该方法的输入参数是一个 `Function`，该 `Function` 会以一个新的 `Future` 实例为参数被调用。由于 `Future` 自身实现了 `Handler<AsyncResult>`，因此你可以将它直接作为回调的 `Handler` 传入到异步方法里。该方法的返回值是提供给异步调用使用的 `Future` 实例。由此可以避免为嵌套的多个异步操作定义不同的 Future 变量，使代码更为简洁。
 
+以下两种写法是等效的：
+
+```java
+vertx.eventBus().send("address","message", future.completer());
+//或
+vertx.eventBus().send("address","message", future);
+```
+
+复杂一点的例子：
+```java
+future.compose(message ->
+  Future.<Message<String>>future(f ->
+    vertx.eventBus().send("address", message.body(), f)
+  )
+);
+//以上和以下两种写法是等效的
+future.compose(message ->{
+  Future<Message<String>> f = Future.<Message<String>>future();//可简写为Future<Message<String>> f = Future.future();
+  vertx.eventBus().send("address",message.body(),f.completer());//可简写为vertx.eventBus().send("address",message.body(),f);
+  return f;
+});
+```
+
 #### 使用组合来实现链式调用 (3.4.0+)
 
 Future 接口提供了 `compose` 方法来链式地组合多个异步操作。在介绍这个方法的用途时，我们先考虑一个传统的同步操作和异常处理的方式。**假设**我们有一个同步的方法 `send` 会抛出一些异常（注意，以下代码只是同步代码的示例，和 vert.x 无关）：
@@ -250,25 +282,52 @@ Future.<Message<String>>future(f ->
 1. 首先通过 eventbus 发送消息 `message` 到 `address1`
 2. 如果第一步成功，则发送第一步的消息的返回值到 `address2`
 3. 如果第二步成功，则发送第二部的消息的返回值到 `address3`
-4. **如果以上任何一步失败**，则不会继续执行下一个异步流程，直接执行最终的 Handler ，并且 `res.successed()` 为 `false`，可以通过 `res.cause()` 来获得异常对象
-5. 如果以上三步全都成功，则同样执行 Handler，`res.successed()` 为 `true`，可以通过 `res.result()` 获取最后一步的结果。
+4. **如果以上任何一步失败**，则不会继续执行下一个异步流程，直接执行最终的 Handler ，并且 `res.succeeded()` 为 `false`，可以通过 `res.cause()` 来获得异常对象
+5. 如果以上三步全都成功，则同样执行 Handler，`res.succeeded()` 为 `true`，可以通过 `res.result()` 获取最后一步的结果。
 
 通过 `compose` 方法来组织代码最大的价值在于可以 **让异步代码的执行顺序和代码的编写顺序看起来一致**，并在任何一步抛出异常时直接退出到最后一个 handler 来处理，**不需要针对每一个异步操作都编写异常处理的逻辑**。这对于编写复杂的异步流程时是非常有用的。
 
-[Future.compose](http://vertx.io/docs/apidocs/io/vertx/core/Future.html#compose-java.util.function.Function-) 这个方法的行为现在非常接近于 JDK1.8 提供的 [CompletableFuture.thenCompose()](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/CompletableFuture.html#thenCompose-java.util.function.Function-)，也很接近于 EcmaScript6 的 [Promise API](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/Promise) 的的接口约定，其实都是关于 Promise 模式的应用。关于更多 Promise 模式的信息还可以参考这里 [https://en.wikipedia.org/wiki/Futures_and_promises](https://en.wikipedia.org/wiki/Futures_and_promises)
+[Future.compose()](http://vertx.io/docs/apidocs/io/vertx/core/Future.html#compose-java.util.function.Function-) 这个方法的行为现在非常接近于 JDK1.8 提供的 [CompletableFuture.thenCompose()](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/CompletableFuture.html#thenCompose-java.util.function.Function-)，也很接近于 EcmaScript6 的 [Promise API](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/Promise) 的的接口约定，其实都是关于 Promise 模式的应用。关于更多 Promise 模式的信息还可以参考这里 [https://en.wikipedia.org/wiki/Futures_and_promises](https://en.wikipedia.org/wiki/Futures_and_promises)
 
-另外以下代码是等价的：
+### 问：Vert.x Web中如何实现Servlet和JSP中的forward和redirect方法？我想将根目录/自动映射到index.html文件该如何做？
+
+答：需要用到其它的handler予以配合，例如我们想将URI：/static/index.html定位到/webroot/index.html文件，则需定义而StaticHandler：
+
 ```java
-//我们版本
-future.compose(message ->
-  Future.<Message<String>>future(f ->
-    vertx.eventBus().send("address", message.body(), f)
-  )
-);
-//官方版本
-future.compose(message ->{
-  Future<Message<String>> f = Future.future();
-  vertx.eventBus().send("address",message.body(),f.completer());
-  return f;
-});
+router.route("/static/*").handler(StaticHandler.create());
 ```
+
+随后便可将根路径/映射为/static/index.html，从而映射到文件夹webroot下的index.html文件。
+
+forward方法用reroute方法：
+
+```java
+router.route("/").handler(ctx->ctx.reroute(HttpMethod.GET,"/static/index.html"));//加上HttpMethod.GET参数原因见下文
+router.route("/static/*").handler(StaticHandler.create());
+```
+
+reroute方法将会保留原Http方法，而StaticHandler只接受GET和HEAD方法，所以如果希望将POST方法reroute到一个静态文件，则需要改变Http方法：
+
+```java
+router.post("/").handler(ctx->ctx.reroute(HttpMethod.GET,"/static/index.html"));
+router.route("/static/*").handler(StaticHandler.create());
+```
+
+redirect方法本质上是设置响应状态码为302，同时设置响应头Location值，根据该原理便可实现：
+
+```java
+router.route("/").handler(ctx->ctx.response().putHeader("Location", "/static/index.html").setStatusCode(302).end());
+router.route("/static/*").handler(StaticHandler.create());
+```
+
+### 问：我之前有过Spring，Akka，Node.js或Go的经验，请问Vert.x的概念有我熟悉的吗？
+
+答：严格说来，不同框架和语言之间的概念无法一一对应，但如果我们不那么严格地去深究细节，Vert.x定义的概念可以从其它框架以及语言中找到一些痕迹，以下是Vert.x中定义概念跟其它框架和语言定义概念的比较，同一行中的概念可被认为是相似的：
+
+|Vert.x|Akka|Spring|EJB|Node.js|Go|
+|:---:|:---:|:---:|:---:|:---:|:---:|
+|Standard Verticle|-|-|-|Reactor|-|
+|Worker Verticle|-|-|Stateless Session Bean|-|-|
+|Multiple Threaded<br>Worker Verticle|-|Bean(Singleton)|-|-|-|
+|Handler|Actor|-|-|-|-|
+|Coroutine|-|-|-|-|Goroutine|

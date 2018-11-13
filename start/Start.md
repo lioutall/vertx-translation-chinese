@@ -4,9 +4,9 @@
 
 欢迎来到Vert.x的世界，相信您在接触Vert.x的同时，迫不及待想动手试一试，如您在学习计算机其它知识一样，总是从Hello World开始，下面我们将引导您制作一个最基本简单的Hello World例子，但在此之前，我们需要您具备有以下基础知识：
 
-1. Java基础知识，您不需要了解Java EE或者是Java ME的知识，但是需要您对Java有所了解，在此文档中，我们不会介绍任何关于Java SE又称Core Java的知识点。请注意：Vert.x 3以上版本需要Java 8以上版本方能运行。
+1. Java基础知识，您不需要了解Java EE或者是Java ME的知识，但是需要您对Java有所了解，在此文档中，我们不会介绍任何关于Java SE又称Core Java的知识点。请注意：Vert.x 3以上版本需要Java 8以上版本方能运行；
 
-2. Maven相关知识，您需要知道什么Maven是做什么用的，以及如何使用Maven。
+2. Maven相关知识，您需要知道什么Maven是做什么用的，以及如何使用Maven；
 
 3. 互联网的基础知识，知道什么是网络协议，尤其是TCP，HTTP协议。
 
@@ -38,7 +38,7 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <vertx.version>3.4.1</vertx.version>
+        <vertx.version>3.4.2</vertx.version>
         <main.class>io.example.Main</main.class>
     </properties>
 
@@ -90,7 +90,7 @@
 </project>
 ```
 
-跟其它Maven项目一样，我们首先定义了项目的GroupId，ArtifactId以及版本号，随后我们定义了两个属性，分别是：`vertx.version`，也就是Vert.x的版本号，此处我们使用最新的Vert.x版本，也就是3.4.1；以及`main.class`，也就是我们要使用的包含有main函数的主类。之后我们引入了两个Maven插件，分别是`maven-compiler-plugin`和`maven-shade-plugin`，前者用来将.java的源文件编译成.class的字节码文件，后者可将编译后的.class字节码文件打包成可执行的jar文件，俗称`fat-jar`。
+跟其它Maven项目一样，我们首先定义了项目的GroupId，ArtifactId以及版本号，随后我们定义了两个属性，分别是：`vertx.version`，也就是Vert.x的版本号，此处我们使用最新的Vert.x版本，也就是3.4.2；以及`main.class`，也就是我们要使用的包含有main函数的主类。之后我们引入了两个Maven插件，分别是`maven-compiler-plugin`和`maven-shade-plugin`，前者用来将.java的源文件编译成.class的字节码文件，后者可将编译后的.class字节码文件打包成可执行的jar文件，俗称`fat-jar`。
 
 然后我们在`src/main/java/io/example`目录下新建两个java文件，分别是`Main.java`和`MyFirstVerticle.java`，代码如下：
 
@@ -154,7 +154,7 @@ public class MyFirstVerticle extends AbstractVerticle {
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <vertx.version>3.4.1</vertx.version>
+        <vertx.version>3.4.2</vertx.version>
         <main.class>io.vertx.core.Launcher</main.class>
         <main.verticle>io.example.MainVerticle</main.verticle>
     </properties>
@@ -245,7 +245,7 @@ public class MainVerticle extends AbstractVerticle {
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <vertx.version>3.4.1</vertx.version>
+        <vertx.version>3.4.2</vertx.version>
         <main.class>io.vertx.core.Launcher</main.class>
         <main.verticle>io.example.MainVerticle</main.verticle>
     </properties>
@@ -301,6 +301,12 @@ public class MainVerticle extends AbstractVerticle {
                                         <Main-Verticle>${main.verticle}</Main-Verticle>
                                     </manifestEntries>
                                 </transformer>
+                                
+                                <!--多语言支持在打包时需加入以下转换器-->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                    <resource>META-INF/services/io.vertx.core.spi.VerticleFactory</resource>
+                                </transformer>
+                                
                             </transformers>
                             <artifactSet />
                             <outputFile>${project.build.directory}/${project.artifactId}-${project.version}-prod.jar</outputFile>
